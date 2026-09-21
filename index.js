@@ -15,18 +15,15 @@
     function hideDropdown() { dropdown.style.display = 'none'; }
 
     function getImageUrl(item) {
-      // 1. Direct full URL provided
       var rawImg = item.image || item.cover || item.thumbnail || (item.images && item.images[0]);
       if (typeof rawImg === 'string' && rawImg.startsWith('http')) {
         return rawImg;
       }
       
-      // 2. Relative path provided
       if (typeof rawImg === 'string' && rawImg.length > 0) {
         return rawImg.startsWith('/') ? ('https://cdn.komerza.com' + rawImg) : ('https://cdn.komerza.com/' + rawImg);
       }
 
-      // 3. Construct URL from storeId, productId, and imageNames array
       var storeId = item.storeId || item.store_id;
       var productId = item.id || item._id;
       var imageName = (item.imageNames && item.imageNames[0]) || (item.images && item.images[0]);
@@ -40,7 +37,8 @@
 
     function renderResults(items, query) {
       if (items && items.length > 0) {
-        resultsList.innerHTML = items.slice(0, 5).map(function(item){
+        // Removed .slice(0, 5) so it shows all matching items!
+        resultsList.innerHTML = items.map(function(item){
           var url = item.slug ? ('/product/' + item.slug) : (item.id ? ('/product/' + item.id) : (item.url || productsPath));
           var title = item.name || item.title || 'Product';
           var img = getImageUrl(item);
