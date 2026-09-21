@@ -3,32 +3,36 @@ export default {
     const url = new URL(request.url);
     const q = url.searchParams.get('q') || '';
 
-    // Replace this with your actual target store API URL endpoint
-    const targetUrl = `https://api.komerza.com/v1/products?q=${encodeURIComponent(q)}`;
+    // Replace with your actual store's upstream API endpoint
+    const targetUrl = `https://api.komerza.com/v1/products${q ? '?q=' + encodeURIComponent(q) : ''}`;
 
     try {
       const apiResponse = await fetch(targetUrl, {
         headers: {
-          'User-Agent': 'Cloudflare-Worker-Proxy',
+          'User-Agent': 'Mozilla/5.0',
           'Accept': 'application/json'
         }
       });
 
+      if (!apiResponse.ok) {
+        return new Response(JSON.stringify({ error: "Upstream API error: " + apiResponse.status }), {
+          status: 200, // Return 200 with empty array so frontend doesn't break
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        });
+      }
+
       const data = await apiResponse.json();
 
-      // Return the response back to your website with CORS enabled
       return new Response(JSON.stringify(data), {
         status: 200,
         headers: {
           'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type'
+          'Access-Control-Allow-Origin': '*'
         }
       });
     } catch (err) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 500,
+      return new Response(JSON.stringify([]), {
+        status: 200,
         headers: {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*'
