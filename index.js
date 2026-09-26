@@ -3,16 +3,13 @@ export default {
     const url = new URL(request.url);
     const q = (url.searchParams.get('q') || '').toLowerCase();
 
-    // 1. Environment variables from your Worker settings/secrets
     const STORE_ID = env.KOMERZA_STORE_ID;
     const API_KEY = env.KOMERZA_API_KEY;
 
-    // 2. Data source URLs
     const KOMERZA_URL = `https://api.komerza.com/stores/${STORE_ID}/products/all`;
     const GITHUB_PAYLOAD_URL = "https://raw.githubusercontent.com/VelocitySpoof/Spoof/refs/heads/main/payload.txt";
 
     try {
-      // Execute Komerza API and GitHub Raw fetches concurrently
       const [komerzaRes, githubRes] = await Promise.all([
         fetch(KOMERZA_URL, {
           headers: {
@@ -23,10 +20,9 @@ export default {
         }),
         fetch(GITHUB_PAYLOAD_URL, {
           headers: { 'User-Agent': 'Mozilla/5.0' }
-        }).catch(() => null) // Fallback if GitHub request fails
+        }).catch(() => null)
       ]);
 
-      // --- Handle Komerza Response ---
       if (!komerzaRes.ok) {
         return new Response(JSON.stringify({ error: "Upstream API error: " + komerzaRes.status }), {
           status: 200,
@@ -37,9 +33,8 @@ export default {
       const komerzaJson = await komerzaRes.json();
       let products = komerzaJson.data || [];
 
-      // --- Handle GitHub Status Payload Extraction ---
-      let statusMap = new Map();
-
+      // Extract GitHub Statuses
+      let githubProducts = [];
       if (githubRes && githubRes.ok) {
         const rawText = await githubRes.text();
         const catalogMatch = rawText.match(/"catalog":\s*(\[\s*\{[\s\S]*?\}\s*\])\s*,\s*"pinned"/);
@@ -47,17 +42,11 @@ export default {
         if (catalogMatch && catalogMatch[1]) {
           try {
             const catalogData = JSON.parse(catalogMatch[1]);
-            
-            // Unpack nested sections/products and build a status map by ID and Name
             catalogData.forEach(entry => {
               if (entry.sections && Array.isArray(entry.sections)) {
                 entry.sections.forEach(section => {
                   if (section.products && Array.isArray(section.products)) {
-                    section.products.forEach(p => {
-                      const status = p.detectionStatus || p.detectionStatusLabel || 'undetected';
-                      if (p.id) statusMap.set(p.id, status);
-                      if (p.name) statusMap.set(p.name.toLowerCase().trim(), status);
-                    });
+                    githubProducts.push(...section.products);
                   }
                 });
               }
@@ -68,21 +57,34 @@ export default {
         }
       }
 
-      // --- Merge GitHub Detection Status into Komerza Products ---
-      products = products.map(p => {
-        const status = statusMap.get(p.id) || statusMap.get((p.name || '').toLowerCase().trim()) || 'undetected';
+      // Helper function for flexible string matching
+      const cleanStr = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // Merge Statuses using Exact ID -> Clean Name -> Partial Match
+      products = products.map(kp => {
+        const kpCleanName = cleanStr(kp.name);
+
+        // Find match in GitHub payload
+        const match = githubProducts.find(gp => {
+          if (gp.id && kp.id && gp.id === kp.id) return true;
+
+          const gpCleanName = cleanStr(gp.name);
+          if (gpCleanName && kpCleanName) {
+            return gpCleanName === kpCleanName || gpCleanName.includes(kpCleanName) || kpCleanName.includes(gpCleanName);
+          }
+          return false;
+        });
+
         return {
-          ...p,
-          detectionStatus: status
+          ...kp,
+          detectionStatus: match ? (match.detectionStatus || match.detectionStatusLabel || 'undetected') : 'undetected'
         };
       });
 
-      // --- Server-side Search Filtering ---
       if (q) {
         products = products.filter(p => (p.name || '').toLowerCase().includes(q));
       }
 
-      // --- Return Response ---
       return new Response(JSON.stringify(products), {
         status: 200,
         headers: {
