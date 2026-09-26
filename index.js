@@ -39,69 +39,54 @@ export default {
       if (githubRes && githubRes.ok) {
         let rawText = await githubRes.text();
 
-        // 1. Unescape escaped slashes if present in Next.js stream
-        if (rawText.includes('\\"catalog\\"')) {
-          rawText = rawText.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-        }
+        // Fix escaped slashes from Next.js payload stream
+        rawText = rawText.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
 
-        // 2. Try Regex Extraction
-        const catalogMatch = rawText.match(/"catalog":\s*(\[\s*\{[\s\S]*?\}\s*\])\s*,\s*"pinned"/);
+        // Extract product objects containing detectionStatus using regular expressions
+        const productBlockRegex = /\{[^{}]*"name"\s*:\s*"[^"]+"[^{}]*"detectionStatus"\s*:\s*"[^"]+"[^{}]*\}/g;
+        const matches = rawText.match(productBlockRegex);
 
-        if (catalogMatch && catalogMatch[1]) {
-          try {
-            const catalogData = JSON.parse(catalogMatch[1]);
-            catalogData.forEach(entry => {
-              if (entry.sections && Array.isArray(entry.sections)) {
-                entry.sections.forEach(section => {
-                  if (section.products && Array.isArray(section.products)) {
-                    githubProducts.push(...section.products);
-                  }
+        if (matches) {
+          matches.forEach(block => {
+            try {
+              const item = JSON.parse(block);
+              githubProducts.push(item);
+            } catch(e) {
+              // Extract via key-value fallback if full object JSON parsing fails
+              const nameMatch = block.match(/"name"\s*:\s*"([^"]+)"/);
+              const statusMatch = block.match(/"detectionStatus"\s*:\s*"([^"]+)"/);
+              if (nameMatch && statusMatch) {
+                githubProducts.push({
+                  name: nameMatch[1],
+                  detectionStatus: statusMatch[1]
                 });
               }
-            });
-          } catch (jsonErr) {
-            console.error("Regex extracted string failed JSON.parse:", jsonErr);
-          }
-        } else {
-          // Fallback: Check if the github file is pure standard JSON array
-          try {
-            const parsedDirect = JSON.parse(rawText);
-            if (Array.isArray(parsedDirect)) {
-              githubProducts = parsedDirect;
             }
-          } catch (e) {
-            console.error("Payload is neither Next.js catalog stream nor pure JSON array.");
-          }
+          });
         }
       }
 
-      // String Normalizer (Removes spaces, symbols, lowercase)
+      // Normalizer function to clean up product titles for comparison
       const cleanStr = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-      // Merge Statuses
+      // Merge Komerza products with GitHub status overrides
       products = products.map(kp => {
         const kpClean = cleanStr(kp.name);
 
         const match = githubProducts.find(gp => {
-          // Direct ID match
-          if (gp.id && kp.id && gp.id === kp.id) return true;
-
           const gpClean = cleanStr(gp.name);
           if (!gpClean || !kpClean) return false;
-
-          // Name similarity / containment checks
+          
+          // Match if names are equal or contain the same core title
           return gpClean === kpClean || gpClean.includes(kpClean) || kpClean.includes(gpClean);
         });
 
-        // Determine raw detection status string
-        let detectedStatus = 'undetected';
-        if (match) {
-          detectedStatus = match.detectionStatus || match.detectionStatusLabel || match.status || 'undetected';
-        }
+        // Use GitHub status if matched; otherwise default to 'undetected'
+        const overrideStatus = match ? match.detectionStatus : 'undetected';
 
         return {
           ...kp,
-          detectionStatus: detectedStatus
+          detectionStatus: overrideStatus
         };
       });
 
