@@ -24,7 +24,7 @@ export default {
       ]);
 
       if (!komerzaRes.ok) {
-        return new Response(JSON.stringify({ error: "Upstream API error: " + komerzaRes.status }), {
+        return new Response(JSON.stringify({ error: "Komerza API error: " + komerzaRes.status }), {
           status: 200,
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
         });
@@ -35,8 +35,16 @@ export default {
 
       // Extract GitHub Statuses
       let githubProducts = [];
+
       if (githubRes && githubRes.ok) {
-        const rawText = await githubRes.text();
+        let rawText = await githubRes.text();
+
+        // 1. Unescape escaped slashes if present in Next.js stream
+        if (rawText.includes('\\"catalog\\"')) {
+          rawText = rawText.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        }
+
+        // 2. Try Regex Extraction
         const catalogMatch = rawText.match(/"catalog":\s*(\[\s*\{[\s\S]*?\}\s*\])\s*,\s*"pinned"/);
 
         if (catalogMatch && catalogMatch[1]) {
@@ -52,32 +60,48 @@ export default {
               }
             });
           } catch (jsonErr) {
-            console.error("Failed to parse extracted catalog JSON:", jsonErr);
+            console.error("Regex extracted string failed JSON.parse:", jsonErr);
+          }
+        } else {
+          // Fallback: Check if the github file is pure standard JSON array
+          try {
+            const parsedDirect = JSON.parse(rawText);
+            if (Array.isArray(parsedDirect)) {
+              githubProducts = parsedDirect;
+            }
+          } catch (e) {
+            console.error("Payload is neither Next.js catalog stream nor pure JSON array.");
           }
         }
       }
 
-      // Helper function for flexible string matching
+      // String Normalizer (Removes spaces, symbols, lowercase)
       const cleanStr = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-      // Merge Statuses using Exact ID -> Clean Name -> Partial Match
+      // Merge Statuses
       products = products.map(kp => {
-        const kpCleanName = cleanStr(kp.name);
+        const kpClean = cleanStr(kp.name);
 
-        // Find match in GitHub payload
         const match = githubProducts.find(gp => {
+          // Direct ID match
           if (gp.id && kp.id && gp.id === kp.id) return true;
 
-          const gpCleanName = cleanStr(gp.name);
-          if (gpCleanName && kpCleanName) {
-            return gpCleanName === kpCleanName || gpCleanName.includes(kpCleanName) || kpCleanName.includes(gpCleanName);
-          }
-          return false;
+          const gpClean = cleanStr(gp.name);
+          if (!gpClean || !kpClean) return false;
+
+          // Name similarity / containment checks
+          return gpClean === kpClean || gpClean.includes(kpClean) || kpClean.includes(gpClean);
         });
+
+        // Determine raw detection status string
+        let detectedStatus = 'undetected';
+        if (match) {
+          detectedStatus = match.detectionStatus || match.detectionStatusLabel || match.status || 'undetected';
+        }
 
         return {
           ...kp,
-          detectionStatus: match ? (match.detectionStatus || match.detectionStatusLabel || 'undetected') : 'undetected'
+          detectionStatus: detectedStatus
         };
       });
 
@@ -94,8 +118,8 @@ export default {
       });
 
     } catch (err) {
-      return new Response(JSON.stringify([]), {
-        status: 200,
+      return new Response(JSON.stringify({ error: err.message }), {
+        status: 500,
         headers: {
           'Content-Type': 'application/json',
           'Access-Control-Allow-Origin': '*'
