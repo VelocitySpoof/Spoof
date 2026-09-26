@@ -11,7 +11,6 @@ export default {
     const GITHUB_PAYLOAD_URL = "https://raw.githubusercontent.com/VelocitySpoof/Spoof/refs/heads/main/payload.txt";
 
     try {
-      // 1. Fetch Products, Categories, and GitHub Payload in parallel
       const [productsRes, categoriesRes, githubRes] = await Promise.all([
         fetch(KOMERZA_PRODUCTS_URL, {
           headers: {
@@ -42,23 +41,25 @@ export default {
       const productsJson = await productsRes.json();
       let products = productsJson.data || [];
 
-      // 2. Build Category Lookup Map (id -> name)
+      // 1. Build Category Lookup Map
       const categoryMap = new Map();
       if (categoriesRes && categoriesRes.ok) {
         try {
           const catJson = await categoriesRes.json();
-          const categories = catJson.data || [];
-          categories.forEach(cat => {
-            if (cat.id && cat.name) {
-              categoryMap.set(cat.id, cat.name);
-            }
-          });
+          const categories = catJson.data || catJson || [];
+          if (Array.isArray(categories)) {
+            categories.forEach(cat => {
+              if (cat.id && cat.name) {
+                categoryMap.set(String(cat.id), cat.name);
+              }
+            });
+          }
         } catch (e) {
           console.error("Failed to parse categories JSON:", e);
         }
       }
 
-      // 3. Extract GitHub Statuses
+      // 2. Extract GitHub Statuses
       let githubProducts = [];
       if (githubRes && githubRes.ok) {
         let rawText = await githubRes.text();
@@ -84,7 +85,7 @@ export default {
 
       const cleanStr = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-      // 4. Attach Status and Category Name to Products
+      // 3. Process Products & Resolve Category Names
       products = products.map(kp => {
         const kpClean = cleanStr(kp.name);
 
@@ -94,9 +95,31 @@ export default {
           return gpClean === kpClean || gpClean.includes(kpClean) || kpClean.includes(gpClean);
         });
 
-        // Determine category name (check categoryId, category_id, or fallback to "Uncategorized")
-        const catId = kp.categoryId || kp.category_id || (kp.category ? kp.category.id : null);
-        const categoryName = categoryMap.get(catId) || (kp.category ? kp.category.name : 'Uncategorized');
+        // Comprehensive Category Extraction
+        let categoryName = 'Uncategorized';
+
+        // Check embedded category objects first
+        if (kp.category && kp.category.name) {
+          categoryName = kp.category.name;
+        } else if (Array.isArray(kp.categories) && kp.categories.length > 0 && kp.categories[0].name) {
+          categoryName = kp.categories[0].name;
+        } else {
+          // Check ID references mapped against categoryMap
+          const possibleIds = [
+            kp.categoryId,
+            kp.category_id,
+            ...(Array.isArray(kp.categoryIds) ? kp.categoryIds : []),
+            ...(Array.isArray(kp.category_ids) ? kp.category_ids : []),
+            ...(Array.isArray(kp.categories) ? kp.categories.map(c => typeof c === 'object' ? c.id : c) : [])
+          ].filter(Boolean);
+
+          for (const id of possibleIds) {
+            if (categoryMap.has(String(id))) {
+              categoryName = categoryMap.get(String(id));
+              break;
+            }
+          }
+        }
 
         return {
           ...kp,
@@ -109,7 +132,7 @@ export default {
         products = products.filter(p => (p.name || '').toLowerCase().includes(q));
       }
 
-      // 5. Group products by Category Name
+      // 4. Group Products by Resolved Category Name
       const grouped = {};
       products.forEach(product => {
         const cat = product.categoryName || 'Uncategorized';
@@ -119,7 +142,6 @@ export default {
         grouped[cat].push(product);
       });
 
-      // Format response as an array of categories with product arrays
       const responsePayload = Object.keys(grouped).map(catName => ({
         categoryName: catName,
         products: grouped[catName]
